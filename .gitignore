@@ -1,0 +1,6 @@
+.gradle/
+build/
+_inspect_gd/
+_inspect_spore/
+/.idea/
+/libs/
