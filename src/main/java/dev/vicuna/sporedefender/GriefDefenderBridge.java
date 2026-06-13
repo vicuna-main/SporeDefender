@@ -5,18 +5,23 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 final class GriefDefenderBridge {
+    private static final long INITIALIZE_RETRY_DELAY_MILLIS = 5_000L;
     private static final ConcurrentMap<ResourceLocation, UUID> WORLD_UUIDS = new ConcurrentHashMap<>();
+    private static final Set<String> WARNED_MESSAGES = ConcurrentHashMap.newKeySet();
 
     private static volatile boolean initialized;
-    private static volatile boolean unavailableLogged;
+    private static volatile long nextInitializeAttemptMillis;
+    private static volatile ClassLoader griefDefenderClassLoader;
     private static Method getCoreMethod;
     private static Method getClaimAtObjectMethod;
     private static Method getClaimAtUuidMethod;
@@ -60,7 +65,16 @@ final class GriefDefenderBridge {
             if (worldId != null) {
                 return getClaimAtUuidMethod.invoke(core, worldId, pos.getX(), pos.getY(), pos.getZ());
             }
+        } catch (InvocationTargetException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof IllegalStateException) {
+                scheduleInitializeRetry();
+                logUnavailableOnce("GriefDefender API is present but not initialized yet.");
+            } else {
+                logUnavailableOnce("Could not query GriefDefender claims: " + message(cause, exception));
+            }
         } catch (IllegalStateException exception) {
+            scheduleInitializeRetry();
             logUnavailableOnce("GriefDefender API is present but not initialized yet.");
         } catch (ReflectiveOperationException exception) {
             logUnavailableOnce("Could not query GriefDefender claims: " + exception.getMessage());
@@ -71,12 +85,22 @@ final class GriefDefenderBridge {
 
     private static boolean initialize() {
         if (initialized) {
-            return getCoreMethod != null;
+            return true;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now < nextInitializeAttemptMillis) {
+            return false;
         }
 
         synchronized (GriefDefenderBridge.class) {
             if (initialized) {
-                return getCoreMethod != null;
+                return true;
+            }
+
+            now = System.currentTimeMillis();
+            if (now < nextInitializeAttemptMillis) {
+                return false;
             }
 
             try {
@@ -89,26 +113,142 @@ final class GriefDefenderBridge {
                 getClaimAtUuidMethod = core.getMethod("getClaimAt", UUID.class, int.class, int.class, int.class);
                 getWorldUniqueIdMethod = core.getMethod("getWorldUniqueId", Object.class);
                 isWildernessMethod = claim.getMethod("isWilderness");
-            } catch (ClassNotFoundException | NoSuchMethodException exception) {
-                logUnavailableOnce("GriefDefender API classes are not visible to Spore Defender; claim protection is disabled.");
-            } finally {
                 initialized = true;
+                WARNED_MESSAGES.clear();
+                SporeDefender.LOGGER.info("Connected to GriefDefender API through {}.", classLoaderName(griefDefender));
+            } catch (ClassNotFoundException | NoSuchMethodException exception) {
+                resetApiMethods();
+                nextInitializeAttemptMillis = now + INITIALIZE_RETRY_DELAY_MILLIS;
+                logUnavailableOnce("GriefDefender API classes are not visible to Spore Defender yet; claim protection will retry.");
+            } catch (LinkageError error) {
+                resetApiMethods();
+                nextInitializeAttemptMillis = now + INITIALIZE_RETRY_DELAY_MILLIS;
+                logUnavailableOnce("Could not load GriefDefender API classes: " + error.getMessage());
             }
         }
 
-        return getCoreMethod != null;
+        return initialized;
     }
 
     private static Class<?> findClass(String name) throws ClassNotFoundException {
+        if (name.startsWith("com.griefdefender.")) {
+            ClassLoader pluginLoader = griefDefenderPluginClassLoader();
+            if (pluginLoader != null) {
+                try {
+                    return Class.forName(name, false, pluginLoader);
+                } catch (ClassNotFoundException ignored) {
+                    // Fall through to the normal class loader chain.
+                }
+            }
+        }
+
+        try {
+            return findNonPluginClass(name);
+        } catch (ClassNotFoundException exception) {
+            ClassLoader pluginLoader = griefDefenderPluginClassLoader();
+            if (pluginLoader != null) {
+                try {
+                    return Class.forName(name, false, pluginLoader);
+                } catch (ClassNotFoundException ignored) {
+                    // Report the original failure because it reflects the normal lookup path.
+                }
+            }
+            throw exception;
+        }
+    }
+
+    private static Class<?> findNonPluginClass(String name) throws ClassNotFoundException {
+        ClassNotFoundException failure = null;
+
         ClassLoader context = Thread.currentThread().getContextClassLoader();
         if (context != null) {
             try {
                 return Class.forName(name, false, context);
-            } catch (ClassNotFoundException ignored) {
-                // Try the mod class loader next.
+            } catch (ClassNotFoundException exception) {
+                failure = exception;
             }
         }
-        return Class.forName(name);
+
+        ClassLoader ownLoader = GriefDefenderBridge.class.getClassLoader();
+        if (ownLoader != null && ownLoader != context) {
+            try {
+                return Class.forName(name, false, ownLoader);
+            } catch (ClassNotFoundException exception) {
+                failure = exception;
+            }
+        }
+
+        try {
+            return Class.forName(name);
+        } catch (ClassNotFoundException exception) {
+            if (failure != null) {
+                throw failure;
+            }
+            throw exception;
+        }
+    }
+
+    private static ClassLoader griefDefenderPluginClassLoader() {
+        ClassLoader cached = griefDefenderClassLoader;
+        if (cached != null) {
+            return cached;
+        }
+
+        try {
+            Class<?> bukkit = findNonPluginClass("org.bukkit.Bukkit");
+            Object pluginManager = bukkit.getMethod("getPluginManager").invoke(null);
+            if (pluginManager == null) {
+                return null;
+            }
+
+            Object plugin = pluginManager.getClass().getMethod("getPlugin", String.class).invoke(pluginManager, "GriefDefender");
+            if (plugin == null) {
+                return null;
+            }
+
+            ClassLoader loader = plugin.getClass().getClassLoader();
+            if (loader != null) {
+                griefDefenderClassLoader = loader;
+            }
+            return loader;
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    private static void resetApiMethods() {
+        getCoreMethod = null;
+        getClaimAtObjectMethod = null;
+        getClaimAtUuidMethod = null;
+        isWildernessMethod = null;
+        getWorldUniqueIdMethod = null;
+    }
+
+    private static void scheduleInitializeRetry() {
+        synchronized (GriefDefenderBridge.class) {
+            initialized = false;
+            resetApiMethods();
+            nextInitializeAttemptMillis = System.currentTimeMillis() + INITIALIZE_RETRY_DELAY_MILLIS;
+        }
+    }
+
+    private static String classLoaderName(Class<?> type) {
+        ClassLoader loader = type.getClassLoader();
+        if (loader == null) {
+            return "bootstrap class loader";
+        }
+        return loader.getClass().getName();
+    }
+
+    private static String message(Throwable cause, Exception fallback) {
+        if (cause == null) {
+            return fallback.getMessage();
+        }
+        String message = cause.getMessage();
+        if (message == null || message.isBlank()) {
+            return cause.getClass().getName();
+        }
+        return message;
     }
 
     private static UUID worldUuid(Object core, ServerLevel level) {
@@ -184,9 +324,13 @@ final class GriefDefenderBridge {
             Class<?> bukkit = findClass("org.bukkit.Bukkit");
             Method getWorld = bukkit.getMethod("getWorld", String.class);
             for (String name : candidateWorldNames(level)) {
-                Object world = getWorld.invoke(null, name);
-                if (world != null) {
-                    return world;
+                try {
+                    Object world = getWorld.invoke(null, name);
+                    if (world != null) {
+                        return world;
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                    // Try the next likely world name.
                 }
             }
         } catch (ReflectiveOperationException ignored) {
@@ -205,22 +349,22 @@ final class GriefDefenderBridge {
     }
 
     private static boolean isBukkitWorld(Object value) {
-        if (value == null) {
+        return value != null && isTypeNamed(value.getClass(), "org.bukkit.World");
+    }
+
+    private static boolean isTypeNamed(Class<?> type, String name) {
+        if (type == null) {
             return false;
         }
-
-        for (Class<?> type = value.getClass(); type != null; type = type.getSuperclass()) {
-            if ("org.bukkit.World".equals(type.getName())) {
+        if (name.equals(type.getName())) {
+            return true;
+        }
+        for (Class<?> iface : type.getInterfaces()) {
+            if (isTypeNamed(iface, name)) {
                 return true;
             }
-            for (Class<?> iface : type.getInterfaces()) {
-                if ("org.bukkit.World".equals(iface.getName())) {
-                    return true;
-                }
-            }
         }
-
-        return false;
+        return isTypeNamed(type.getSuperclass(), name);
     }
 
     private static List<String> candidateWorldNames(ServerLevel level) {
@@ -247,8 +391,7 @@ final class GriefDefenderBridge {
     }
 
     private static void logUnavailableOnce(String message) {
-        if (!unavailableLogged) {
-            unavailableLogged = true;
+        if (WARNED_MESSAGES.add(message)) {
             SporeDefender.LOGGER.warn(message);
         }
     }

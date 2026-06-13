@@ -26,11 +26,6 @@ neoForge {
     }
 }
 
-dependencies {
-    compileOnly files('libs/spore_2.2.0h_1.21.1_neo.jar')
-    compileOnly files('libs/griefdefender-bukkit-3.1.8.jar')
-}
-
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
