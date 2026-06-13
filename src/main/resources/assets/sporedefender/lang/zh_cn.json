@@ -1,0 +1,9 @@
+{
+  "commands.sporedefender.range.radius": "平面方块半径 %s",
+  "commands.sporedefender.range.chunks": "区块半径 %s",
+  "commands.sporedefender.restore.success": "已还原 %s 个 Spore 感染方块，扫描 %s 个已加载区块，范围：%s。",
+  "commands.sporedefender.prune.success": "已删除 %s 个 Spore 自然蔓延方块，扫描 %s 个已加载区块，范围：%s。",
+  "commands.sporedefender.purge.success": "已清理 %s 个 Spore 实体或掉落物，范围：%s。",
+  "commands.sporedefender.cure.success": "已移除 %s 个 Spore 状态效果，并清理 %s 个滞留效果云，范围：%s。",
+  "commands.sporedefender.clean.success": "已完成清理：还原 %s 个方块，删除 %s 个自然蔓延方块，清理 %s 个 Spore 实体或掉落物，移除 %s 个 Spore 状态效果，并清理 %s 个滞留效果云；中心：%s，范围：%s。"
+}

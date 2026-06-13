@@ -53,16 +53,40 @@ final class SporeCduRestorer {
     }
 
     static boolean canRestore(BlockState state) {
-        return resultBlock(state.getBlock()) != null;
+        return cduUnwrappedState(state) != null || resultBlock(state.getBlock()) != null;
     }
 
     static BlockState restoreState(BlockState state) {
+        BlockState unwrappedCdu = cduUnwrappedState(state);
+        if (unwrappedCdu != null) {
+            return unwrappedCdu;
+        }
+
         Block result = resultBlock(state.getBlock());
         if (result == null || result == state.getBlock()) {
             return null;
         }
 
         return copyMatchingProperties(state, result.defaultBlockState());
+    }
+
+    private static BlockState cduUnwrappedState(BlockState state) {
+        ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+        if (!ResourceLocation.fromNamespaceAndPath("spore", "cdu").equals(id)) {
+            return null;
+        }
+
+        Property<?> property = state.getBlock().getStateDefinition().getProperty("lit");
+        if (property == null || property.getValueClass() != Boolean.class) {
+            return null;
+        }
+
+        Object value = state.getValue(property);
+        if (!Boolean.TRUE.equals(value)) {
+            return null;
+        }
+
+        return setBoolean(state, property, false);
     }
 
     private static Block resultBlock(Block source) {
@@ -181,6 +205,14 @@ final class SporeCduRestorer {
     }
 
     private static <T extends Comparable<T>> BlockState copyProperty(BlockState state, Property<T> property, Comparable<?> value) {
+        try {
+            return state.setValue(property, property.getValueClass().cast(value));
+        } catch (IllegalArgumentException exception) {
+            return state;
+        }
+    }
+
+    private static <T extends Comparable<T>> BlockState setBoolean(BlockState state, Property<T> property, boolean value) {
         try {
             return state.setValue(property, property.getValueClass().cast(value));
         } catch (IllegalArgumentException exception) {

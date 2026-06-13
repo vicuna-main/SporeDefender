@@ -6,20 +6,42 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.AreaEffectCloud;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.phys.AABB;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
 final class SporeCleaner {
+    private static volatile Field areaEffectCloudPotionContentsField;
+    private static volatile boolean areaEffectCloudPotionContentsLookupAttempted;
+
     private SporeCleaner() {
     }
 
     static BlockCleanResult restoreBlocks(ServerLevel level, CleanRange range) {
-        SporeCduRestorer.prepareForScan();
+        return cleanBlocks(level, range, false);
+    }
 
-        int restored = 0;
+    static BlockCleanResult cleanseBlocks(ServerLevel level, CleanRange range) {
+        return cleanBlocks(level, range, true);
+    }
+
+    static BlockCleanResult removeNaturalSpreadBlocks(ServerLevel level, CleanRange range) {
+        SporeNaturalSpreadBlocks.prepareForScan();
+
+        int removed = 0;
         int loadedChunks = 0;
         BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
 
@@ -31,14 +53,71 @@ final class SporeCleaner {
                 }
 
                 loadedChunks++;
-                restored += restoreChunk(level, range, chunk, mutable);
+                removed += cleanChunk(level, range, chunk, mutable, false, true).removedSpreadBlocks();
             }
         }
 
-        return new BlockCleanResult(restored, loadedChunks);
+        return new BlockCleanResult(0, removed, loadedChunks);
+    }
+
+    private static BlockCleanResult cleanBlocks(ServerLevel level, CleanRange range, boolean removeNaturalSpread) {
+        SporeCduRestorer.prepareForScan();
+        if (removeNaturalSpread) {
+            SporeNaturalSpreadBlocks.prepareForScan();
+        }
+
+        int restored = 0;
+        int removed = 0;
+        int loadedChunks = 0;
+        BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+
+        for (int chunkX = range.minChunkX(); chunkX <= range.maxChunkX(); chunkX++) {
+            for (int chunkZ = range.minChunkZ(); chunkZ <= range.maxChunkZ(); chunkZ++) {
+                LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
+                if (chunk == null) {
+                    continue;
+                }
+
+                loadedChunks++;
+                BlockCleanResult result = cleanChunk(level, range, chunk, mutable, true, removeNaturalSpread);
+                restored += result.restoredBlocks();
+                removed += result.removedSpreadBlocks();
+            }
+        }
+
+        return new BlockCleanResult(restored, removed, loadedChunks);
     }
 
     static int purgeEntities(ServerLevel level, CleanRange range) {
+        Set<String> extraRemovableEntityIds = SporeDefenderConfig.extraRemovableEntityIds();
+        boolean includeSporeItemDrops = SporeDefenderConfig.cleanSporeItemDrops();
+        int removed = 0;
+        for (Entity entity : level.getEntities((Entity) null, wholeHeightArea(level, range), entity -> SporeEntityRules.shouldPurge(entity, extraRemovableEntityIds, includeSporeItemDrops) && isInRange(entity, range))) {
+            entity.discard();
+            removed++;
+        }
+
+        return removed;
+    }
+
+    static EffectCleanResult cureEffects(ServerLevel level, CleanRange range) {
+        AABB area = wholeHeightArea(level, range);
+        int removedEffects = 0;
+        int removedClouds = 0;
+
+        for (LivingEntity entity : level.getEntitiesOfClass(LivingEntity.class, area, entity -> isInRange(entity, range))) {
+            removedEffects += removeSporeEffects(entity);
+        }
+
+        for (AreaEffectCloud cloud : level.getEntitiesOfClass(AreaEffectCloud.class, area, cloud -> isInRange(cloud, range) && hasSporeEffect(cloud))) {
+            cloud.discard();
+            removedClouds++;
+        }
+
+        return new EffectCleanResult(removedEffects, removedClouds);
+    }
+
+    private static AABB wholeHeightArea(ServerLevel level, CleanRange range) {
         AABB area = new AABB(
                 range.minX(),
                 level.getMinBuildHeight(),
@@ -47,18 +126,12 @@ final class SporeCleaner {
                 level.getMaxBuildHeight(),
                 range.maxZ() + 1.0D
         );
-        int removed = 0;
-
-        for (Entity entity : level.getEntities((Entity) null, area, entity -> isSporeEntity(entity) && isInRange(entity, range))) {
-            entity.discard();
-            removed++;
-        }
-
-        return removed;
+        return area;
     }
 
-    private static int restoreChunk(ServerLevel level, CleanRange range, LevelChunk chunk, BlockPos.MutableBlockPos mutable) {
+    private static BlockCleanResult cleanChunk(ServerLevel level, CleanRange range, LevelChunk chunk, BlockPos.MutableBlockPos mutable, boolean restoreInfected, boolean removeNaturalSpread) {
         int restored = 0;
+        int removed = 0;
         int minX = Math.max(range.minX(), chunk.getPos().getMinBlockX());
         int maxX = Math.min(range.maxX(), chunk.getPos().getMaxBlockX());
         int minZ = Math.max(range.minZ(), chunk.getPos().getMinBlockZ());
@@ -67,7 +140,7 @@ final class SporeCleaner {
 
         for (int sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
             LevelChunkSection section = sections[sectionIndex];
-            if (section.hasOnlyAir() || !section.maybeHas(SporeCduRestorer::canRestore)) {
+            if (section.hasOnlyAir() || !sectionMayContainCleanableBlocks(section, restoreInfected, removeNaturalSpread)) {
                 continue;
             }
 
@@ -84,20 +157,111 @@ final class SporeCleaner {
                     for (int y = minY; y <= maxY; y++) {
                         mutable.set(x, y, z);
                         BlockState current = chunk.getBlockState(mutable);
-                        BlockState restoredState = SporeCduRestorer.restoreState(current);
-                        if (restoredState != null && level.setBlock(mutable, restoredState, 3)) {
-                            restored++;
+                        BlockState replacement = replacementState(current, restoreInfected, removeNaturalSpread);
+                        if (replacement == null) {
+                            continue;
+                        }
+
+                        if (level.setBlock(mutable, replacement, 3)) {
+                            if (replacement.isAir()) {
+                                removed++;
+                            } else {
+                                restored++;
+                            }
                         }
                     }
                 }
             }
         }
 
-        return restored;
+        return new BlockCleanResult(restored, removed, 0);
     }
 
-    private static boolean isSporeEntity(Entity entity) {
-        ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
+    private static boolean sectionMayContainCleanableBlocks(LevelChunkSection section, boolean restoreInfected, boolean removeNaturalSpread) {
+        return section.maybeHas(state ->
+                (restoreInfected && SporeCduRestorer.canRestore(state))
+                        || (removeNaturalSpread && SporeNaturalSpreadBlocks.canRemove(state)));
+    }
+
+    private static BlockState replacementState(BlockState current, boolean restoreInfected, boolean removeNaturalSpread) {
+        if (restoreInfected) {
+            BlockState restoredState = SporeCduRestorer.restoreState(current);
+            if (restoredState != null) {
+                return restoredState;
+            }
+        }
+
+        if (removeNaturalSpread && SporeNaturalSpreadBlocks.canRemove(current)) {
+            return Blocks.AIR.defaultBlockState();
+        }
+
+        return null;
+    }
+
+    private static int removeSporeEffects(LivingEntity entity) {
+        int removed = 0;
+        List<MobEffectInstance> effects = new ArrayList<>(entity.getActiveEffects());
+        for (MobEffectInstance effect : effects) {
+            if (isSporeEffect(effect)) {
+                if (entity.removeEffect(effect.getEffect())) {
+                    removed++;
+                }
+            }
+        }
+        return removed;
+    }
+
+    private static boolean hasSporeEffect(AreaEffectCloud cloud) {
+        PotionContents contents = areaEffectCloudPotionContents(cloud);
+        if (contents == null || !contents.hasEffects()) {
+            return false;
+        }
+
+        for (MobEffectInstance effect : contents.getAllEffects()) {
+            if (isSporeEffect(effect)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static PotionContents areaEffectCloudPotionContents(AreaEffectCloud cloud) {
+        Field field = areaEffectCloudPotionContentsField();
+        if (field == null) {
+            return null;
+        }
+
+        try {
+            Object value = field.get(cloud);
+            return value instanceof PotionContents contents ? contents : null;
+        } catch (IllegalAccessException exception) {
+            return null;
+        }
+    }
+
+    private static Field areaEffectCloudPotionContentsField() {
+        if (areaEffectCloudPotionContentsLookupAttempted) {
+            return areaEffectCloudPotionContentsField;
+        }
+
+        try {
+            Field field = AreaEffectCloud.class.getDeclaredField("potionContents");
+            field.setAccessible(true);
+            areaEffectCloudPotionContentsField = field;
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            areaEffectCloudPotionContentsField = null;
+        } finally {
+            areaEffectCloudPotionContentsLookupAttempted = true;
+        }
+        return areaEffectCloudPotionContentsField;
+    }
+
+    private static boolean isSporeEffect(MobEffectInstance effect) {
+        return isSporeEffect(effect.getEffect().value());
+    }
+
+    private static boolean isSporeEffect(MobEffect effect) {
+        ResourceLocation id = BuiltInRegistries.MOB_EFFECT.getKey(effect);
         return "spore".equals(id.getNamespace());
     }
 
@@ -105,6 +269,9 @@ final class SporeCleaner {
         return range.containsHorizontal(Mth.floor(entity.getX()), Mth.floor(entity.getZ()));
     }
 
-    record BlockCleanResult(int restoredBlocks, int loadedChunks) {
+    record BlockCleanResult(int restoredBlocks, int removedSpreadBlocks, int loadedChunks) {
+    }
+
+    record EffectCleanResult(int removedEffects, int removedClouds) {
     }
 }

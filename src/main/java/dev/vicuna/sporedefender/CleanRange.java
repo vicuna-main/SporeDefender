@@ -1,6 +1,7 @@
 package dev.vicuna.sporedefender;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.ChunkPos;
 
 record CleanRange(
@@ -14,7 +15,7 @@ record CleanRange(
         int minChunkZ,
         int maxChunkZ,
         int horizontalRadius,
-        String description
+        Component description
 ) {
     static CleanRange blockRadius(BlockPos center, int radius) {
         int minX = center.getX() - radius;
@@ -32,7 +33,7 @@ record CleanRange(
                 minZ >> 4,
                 maxZ >> 4,
                 radius,
-                "horizontal block radius " + radius
+                Component.translatable("commands.sporedefender.range.radius", radius)
         );
     }
 
@@ -53,7 +54,7 @@ record CleanRange(
                 minChunkZ,
                 maxChunkZ,
                 -1,
-                "chunk radius " + chunks
+                Component.translatable("commands.sporedefender.range.chunks", chunks)
         );
     }
 
