@@ -1,7 +1,5 @@
 package dev.vicuna.sporedefender;
 
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -205,10 +203,6 @@ final class SporeNaturalSpreadBlocks {
     }
 
     private static Optional<Block> block(String id) {
-        ResourceLocation location = ResourceLocation.tryParse(id);
-        if (location == null) {
-            return Optional.empty();
-        }
-        return BuiltInRegistries.BLOCK.getOptional(location);
+        return SporeRegistries.block(id);
     }
 }

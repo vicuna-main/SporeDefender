@@ -17,5 +17,6 @@ public final class SporeDefender {
         modContainer.registerConfig(ModConfig.Type.SERVER, SporeDefenderConfig.SPEC);
         NeoForge.EVENT_BUS.addListener(SporeDefenderCommands::register);
         NeoForge.EVENT_BUS.addListener(SporeDefenderEvents::onEntityJoinLevel);
+        NeoForge.EVENT_BUS.addListener(AsyncSporeCleaner::onServerTick);
     }
 }

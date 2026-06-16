@@ -1,7 +1,5 @@
 package dev.vicuna.sporedefender;
 
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
@@ -71,8 +69,7 @@ final class SporeCduRestorer {
     }
 
     private static BlockState cduUnwrappedState(BlockState state) {
-        ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
-        if (!ResourceLocation.fromNamespaceAndPath("spore", "cdu").equals(id)) {
+        if (!SporeRegistries.SPORE_CDU.equals(SporeRegistries.blockId(state.getBlock()))) {
             return null;
         }
 
@@ -186,11 +183,7 @@ final class SporeCduRestorer {
     }
 
     private static Block block(String id) {
-        ResourceLocation location = ResourceLocation.tryParse(id);
-        if (location == null) {
-            return null;
-        }
-        return BuiltInRegistries.BLOCK.getOptional(location).orElse(null);
+        return SporeRegistries.block(id).orElse(null);
     }
 
     private static BlockState copyMatchingProperties(BlockState source, BlockState target) {

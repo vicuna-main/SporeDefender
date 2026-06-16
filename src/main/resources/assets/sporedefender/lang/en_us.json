@@ -1,9 +1,0 @@
-{
-  "commands.sporedefender.range.radius": "horizontal block radius %s",
-  "commands.sporedefender.range.chunks": "chunk radius %s",
-  "commands.sporedefender.restore.success": "Restored %s Spore-infected blocks in %s loaded chunks using %s.",
-  "commands.sporedefender.prune.success": "Removed %s natural Spore spread blocks in %s loaded chunks using %s.",
-  "commands.sporedefender.purge.success": "Removed %s Spore entities or item drops using %s.",
-  "commands.sporedefender.cure.success": "Removed %s Spore effects and %s lingering effect clouds using %s.",
-  "commands.sporedefender.clean.success": "Restored %s blocks, removed %s natural spread blocks, removed %s Spore entities or item drops, cleared %s Spore effects, and removed %s lingering effect clouds near %s using %s."
-}

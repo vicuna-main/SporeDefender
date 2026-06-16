@@ -71,4 +71,8 @@ record CleanRange(
         long radius = horizontalRadius;
         return dx * dx + dz * dz <= radius * radius;
     }
+
+    long chunkCount() {
+        return ((long) maxChunkX - minChunkX + 1L) * ((long) maxChunkZ - minChunkZ + 1L);
+    }
 }

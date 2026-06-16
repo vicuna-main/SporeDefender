@@ -2,8 +2,6 @@ package dev.vicuna.sporedefender;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffect;
@@ -39,6 +37,7 @@ final class SporeCleaner {
     }
 
     static BlockCleanResult removeNaturalSpreadBlocks(ServerLevel level, CleanRange range) {
+        SporeCduRestorer.prepareForScan();
         SporeNaturalSpreadBlocks.prepareForScan();
 
         int removed = 0;
@@ -88,11 +87,28 @@ final class SporeCleaner {
         return new BlockCleanResult(restored, removed, loadedChunks);
     }
 
+    static BlockCleanResult cleanLoadedChunk(ServerLevel level, CleanRange range, LevelChunk chunk, boolean restoreInfected, boolean removeNaturalSpread) {
+        return cleanChunk(level, range, chunk, new BlockPos.MutableBlockPos(), restoreInfected, removeNaturalSpread);
+    }
+
     static int purgeEntities(ServerLevel level, CleanRange range) {
         Set<String> extraRemovableEntityIds = SporeDefenderConfig.extraRemovableEntityIds();
         boolean includeSporeItemDrops = SporeDefenderConfig.cleanSporeItemDrops();
         int removed = 0;
         for (Entity entity : level.getEntities((Entity) null, wholeHeightArea(level, range), entity -> SporeEntityRules.shouldPurge(entity, extraRemovableEntityIds, includeSporeItemDrops) && isInRange(entity, range))) {
+            entity.discard();
+            removed++;
+        }
+
+        return removed;
+    }
+
+    static int purgeEntitiesInChunk(ServerLevel level, CleanRange range, int chunkX, int chunkZ) {
+        Set<String> extraRemovableEntityIds = SporeDefenderConfig.extraRemovableEntityIds();
+        boolean includeSporeItemDrops = SporeDefenderConfig.cleanSporeItemDrops();
+        ChunkSlice slice = chunkSlice(level, range, chunkX, chunkZ);
+        int removed = 0;
+        for (Entity entity : level.getEntities((Entity) null, slice.area(), entity -> slice.contains(entity) && SporeEntityRules.shouldPurge(entity, extraRemovableEntityIds, includeSporeItemDrops))) {
             entity.discard();
             removed++;
         }
@@ -117,8 +133,25 @@ final class SporeCleaner {
         return new EffectCleanResult(removedEffects, removedClouds);
     }
 
+    static EffectCleanResult cureEffectsInChunk(ServerLevel level, CleanRange range, int chunkX, int chunkZ) {
+        ChunkSlice slice = chunkSlice(level, range, chunkX, chunkZ);
+        int removedEffects = 0;
+        int removedClouds = 0;
+
+        for (LivingEntity entity : level.getEntitiesOfClass(LivingEntity.class, slice.area(), slice::contains)) {
+            removedEffects += removeSporeEffects(entity);
+        }
+
+        for (AreaEffectCloud cloud : level.getEntitiesOfClass(AreaEffectCloud.class, slice.area(), cloud -> slice.contains(cloud) && hasSporeEffect(cloud))) {
+            cloud.discard();
+            removedClouds++;
+        }
+
+        return new EffectCleanResult(removedEffects, removedClouds);
+    }
+
     private static AABB wholeHeightArea(ServerLevel level, CleanRange range) {
-        AABB area = new AABB(
+        return new AABB(
                 range.minX(),
                 level.getMinBuildHeight(),
                 range.minZ(),
@@ -126,7 +159,28 @@ final class SporeCleaner {
                 level.getMaxBuildHeight(),
                 range.maxZ() + 1.0D
         );
-        return area;
+    }
+
+    private static ChunkSlice chunkSlice(ServerLevel level, CleanRange range, int chunkX, int chunkZ) {
+        int minX = Math.max(range.minX(), chunkX << 4);
+        int maxX = Math.min(range.maxX(), (chunkX << 4) + 15);
+        int minZ = Math.max(range.minZ(), chunkZ << 4);
+        int maxZ = Math.min(range.maxZ(), (chunkZ << 4) + 15);
+        return new ChunkSlice(
+                minX,
+                maxX,
+                minZ,
+                maxZ,
+                range,
+                new AABB(
+                        minX,
+                        level.getMinBuildHeight(),
+                        minZ,
+                        maxX + 1.0D,
+                        level.getMaxBuildHeight(),
+                        maxZ + 1.0D
+                )
+        );
     }
 
     private static BlockCleanResult cleanChunk(ServerLevel level, CleanRange range, LevelChunk chunk, BlockPos.MutableBlockPos mutable, boolean restoreInfected, boolean removeNaturalSpread) {
@@ -261,8 +315,7 @@ final class SporeCleaner {
     }
 
     private static boolean isSporeEffect(MobEffect effect) {
-        ResourceLocation id = BuiltInRegistries.MOB_EFFECT.getKey(effect);
-        return "spore".equals(id.getNamespace());
+        return SporeRegistries.isSpore(SporeRegistries.effectId(effect));
     }
 
     private static boolean isInRange(Entity entity, CleanRange range) {
@@ -273,5 +326,13 @@ final class SporeCleaner {
     }
 
     record EffectCleanResult(int removedEffects, int removedClouds) {
+    }
+
+    private record ChunkSlice(int minX, int maxX, int minZ, int maxZ, CleanRange range, AABB area) {
+        boolean contains(Entity entity) {
+            int x = Mth.floor(entity.getX());
+            int z = Mth.floor(entity.getZ());
+            return x >= minX && x <= maxX && z >= minZ && z <= maxZ && range.containsHorizontal(x, z);
+        }
     }
 }

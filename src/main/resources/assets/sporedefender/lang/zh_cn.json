@@ -5,5 +5,13 @@
   "commands.sporedefender.prune.success": "已删除 %s 个 Spore 自然蔓延方块，扫描 %s 个已加载区块，范围：%s。",
   "commands.sporedefender.purge.success": "已清理 %s 个 Spore 实体或掉落物，范围：%s。",
   "commands.sporedefender.cure.success": "已移除 %s 个 Spore 状态效果，并清理 %s 个滞留效果云，范围：%s。",
-  "commands.sporedefender.clean.success": "已完成清理：还原 %s 个方块，删除 %s 个自然蔓延方块，清理 %s 个 Spore 实体或掉落物，移除 %s 个 Spore 状态效果，并清理 %s 个滞留效果云；中心：%s，范围：%s。"
+  "commands.sporedefender.clean.success": "已完成清理：还原 %s 个方块，删除 %s 个自然蔓延方块，清理 %s 个 Spore 实体或掉落物，移除 %s 个 Spore 状态效果，并清理 %s 个滞留效果云；中心：%s，范围：%s。",
+  "commands.sporedefender.operation.restore": "还原感染方块",
+  "commands.sporedefender.operation.prune": "删除自然蔓延方块",
+  "commands.sporedefender.operation.purge": "清理实体和掉落物",
+  "commands.sporedefender.operation.cure": "移除状态效果",
+  "commands.sporedefender.operation.clean": "完整清理",
+  "commands.sporedefender.job.queued": "已启动后台任务：%s，范围：%s，预计检查 %s 个区块；当前队列位置：%s。",
+  "commands.sporedefender.job.progress": "后台任务进度：%s，已检查 %s/%s 个区块，已加载 %s 个；还原 %s，删除蔓延方块 %s，清理实体 %s，移除效果 %s，清理效果云 %s。",
+  "commands.sporedefender.job.complete": "后台任务完成：%s，共检查 %s 个区块，其中已加载 %s 个；还原 %s 个方块，删除 %s 个自然蔓延方块，清理 %s 个实体或掉落物，移除 %s 个状态效果，清理 %s 个滞留效果云。"
 }
